@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.9.9/dist/livekit-client.umd.min.js"></script>
+<style>
+  :root {
+    --chalk: #eef2f6;
+    --paper: #ffffff;
+    --ink: #14213d;
+    --ink-soft: #55627d;
+    --mist: #d5dde8;
+    --blue: #2f4bff;
+    --amber: #ffb020;
+    --danger: #c8372d;
+    --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+    --body: "Figtree", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --chalk: #0f1626;
+      --paper: #18223a;
+      --ink: #e8edf7;
+      --ink-soft: #97a3bd;
+      --mist: #2a3654;
+      --blue: #7b8dff;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--body);
+    color: var(--ink);
+    background: var(--chalk);
+    padding: env(safe-area-inset-top, 0) 0 env(safe-area-inset-bottom, 0);
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  :focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+
+  .app {
+    height: 100%;
+    max-width: 1080px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto;
+    gap: 16px;
+    padding: 16px;
+  }
+  header { display: flex; justify-content: space-between; align-items: center; }
+  h1 { font-family: var(--display); font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em; }
+  .status { font-size: 0.9rem; color: var(--ink-soft); display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--mist); }
+  .status[data-state="listening"] .dot { background: var(--blue); }
+  .status[data-state="thinking"] .dot { background: var(--amber); }
+  .status[data-state="speaking"] .dot { background: var(--blue); }
+  .status[data-state="error"] .dot { background: var(--danger); }
+
+  main { display: grid; grid-template-rows: minmax(220px, 40%) 1fr; gap: 16px; min-height: 0; }
+
+  .stage {
+    position: relative;
+    background: var(--paper);
+    border: 1px solid var(--mist);
+    border-radius: 28px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+  }
+  canvas#orb { width: min(100%, 320px); aspect-ratio: 1; }
+  video#preview {
+    position: absolute; right: 14px; bottom: 14px;
+    width: 112px; aspect-ratio: 3 / 4; object-fit: cover;
+    border-radius: 14px; border: 2px solid var(--paper);
+    transform: scaleX(-1); background: var(--ink);
+    display: none;
+  }
+  video#preview.on { display: block; }
+  .hint { position: absolute; left: 18px; bottom: 16px; font-size: 0.9rem; color: var(--ink-soft); max-width: 55%; }
+
+  .transcript {
+    background: var(--paper);
+    border: 1px solid var(--mist);
+    border-radius: 16px;
+    padding: 16px;
+    overflow-y: auto;
+    display: flex; flex-direction: column; gap: 12px;
+    min-height: 0;
+  }
+  .empty { margin: auto; text-align: center; color: var(--ink-soft); max-width: 28ch; line-height: 1.5; }
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 14px; line-height: 1.45; font-size: 1rem; }
+  .msg.agent { align-self: flex-start; background: var(--chalk); border-bottom-left-radius: 4px; }
+  .msg.user { align-self: flex-end; background: var(--blue); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.interim { opacity: 0.65; }
+
+  footer { display: flex; justify-content: center; gap: 12px; padding-bottom: 4px; }
+  .btn {
+    min-height: 52px; padding: 0 22px; border-radius: 26px;
+    border: 1px solid var(--mist); background: var(--paper);
+    font-weight: 600; transition: background 0.15s, transform 0.1s;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; padding: 0 34px; }
+  .btn.end { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .btn[aria-pressed="false"] { background: var(--chalk); color: var(--ink-soft); }
+  .btn[hidden] { display: none; }
+
+  @media (min-width: 860px) {
+    main { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+    .stage { border-radius: 36px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .btn { transition: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Jarvis</h1>
+    <div class="status" id="status" data-state="idle" role="status" aria-live="polite">
+      <span class="dot"></span><span id="statusText">Not connected</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="stage" aria-label="Assistant">
+      <canvas id="orb" width="640" height="640"></canvas>
+      <p class="hint" id="hint">Press Start to talk to Jarvis.</p>
+      <video id="preview" playsinline muted></video>
+    </section>
+    <section class="transcript" id="transcript" aria-label="Conversation" aria-live="polite">
+      <p class="empty" id="empty">Your conversation will appear here once you start talking.</p>
+    </section>
+  </main>
+
+  <footer>
+    <button class="btn primary" id="startBtn">Start</button>
+    <button class="btn" id="micBtn" aria-pressed="true" hidden>Mute</button>
+    <button class="btn" id="camBtn" aria-pressed="false" hidden>Camera on</button>
+    <button class="btn end" id="endBtn" hidden>End</button>
+  </footer>
+</div>
+
+<div id="audioSink" hidden></div>
+
+<script>
+(() => {
+  const { Room, RoomEvent, Track, ParticipantKind } = LivekitClient;
+
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    status: $("status"), statusText: $("statusText"), hint: $("hint"),
+    transcript: $("transcript"), empty: $("empty"), preview: $("preview"),
+    start: $("startBtn"), mic: $("micBtn"), cam: $("camBtn"), end: $("endBtn"),
+    sink: $("audioSink"), orb: $("orb"),
+  };
+
+  let room = null;
+  let agentState = "idle"; // idle | connecting | initializing | listening | thinking | speaking | error
+  const segments = new Map(); // segment id -> { el, role }
+
+  const STATE_LABEL = {
+    idle: "Not connected", connecting: "Connecting…", initializing: "Jarvis is joining…",
+    listening: "Listening", thinking: "Thinking…", speaking: "Speaking", error: "Connection problem",
+  };
+
+  function setState(s, hint) {
+    agentState = s;
+    els.status.dataset.state = s;
+    els.statusText.textContent = STATE_LABEL[s] || s;
+    if (hint !== undefined) els.hint.textContent = hint;
+  }
+
+  /* ---------- Transcript ---------- */
+  function upsertSegment(id, role, text, isFinal) {
+    if (!text) return;
+    els.empty.hidden = true;
+    let seg = segments.get(id);
+    if (!seg) {
+      const el = document.createElement("div");
+      el.className = `msg ${role}`;
+      els.transcript.appendChild(el);
+      seg = { el, role };
+      segments.set(id, seg);
+    }
+    seg.el.textContent = text;
+    seg.el.classList.toggle("interim", !isFinal);
+    els.transcript.scrollTop = els.transcript.scrollHeight;
+  }
+
+  function roleFor(identity) {
+    return room && identity === room.localParticipant.identity ? "user" : "agent";
+  }
+
+  /* ---------- Connection ---------- */
+  async function start() {
+    els.start.disabled = true;
+    setState("connecting", "Connecting…");
+    try {
+      const res = await fetch("/api/token");
+      if (!res.ok) throw new Error((await res.json()).detail || "Token request failed");
+      const { token, url } = await res.json();
+
+      room = new Room({ adaptiveStream: true, dynacast: true });
+
+      room.on(RoomEvent.TrackSubscribed, (track) => {
+        if (track.kind === Track.Kind.Audio) els.sink.appendChild(track.attach());
+      });
+      room.on(RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach((e) => e.remove()));
+
+      // Agent state (listening / thinking / speaking) is published as a participant attribute.
+      room.on(RoomEvent.ParticipantAttributesChanged, (attrs, participant) => {
+        if (participant.kind === ParticipantKind.AGENT && attrs["lk.agent.state"]) {
+          const s = attrs["lk.agent.state"];
+          setState(s, s === "listening" ? "Go ahead, I'm listening." : s === "speaking" ? "" : "");
+        }
+      });
+
+      // Transcription: new text-stream API (livekit-client 2.8+), segment id keeps updates in one bubble.
+      room.registerTextStreamHandler("lk.transcription", async (reader, info) => {
+        const attrs = reader.info.attributes || {};
+        const id = attrs["lk.segment_id"] || reader.info.id;
+        // The agent publishes both sides; user speech carries the transcribed track id.
+        const isUser = !!attrs["lk.transcribed_track_id"] || roleFor(info.identity) === "user";
+        let text = "";
+        for await (const chunk of reader) {
+          text += chunk;
+          upsertSegment(id, isUser ? "user" : "agent", text, false);
+        }
+        upsertSegment(id, isUser ? "user" : "agent", text, true);
+      });
+
+      // Legacy transcription events (older agents versions); same segment ids avoid duplicates.
+      room.on(RoomEvent.TranscriptionReceived, (segs, participant) => {
+        const role = participant && room && participant.identity === room.localParticipant.identity ? "user" : "agent";
+        segs.forEach((s) => upsertSegment(s.id, role, s.text, s.final));
+      });
+
+      room.on(RoomEvent.ParticipantConnected, (p) => {
+        if (p.kind === ParticipantKind.AGENT && agentState === "connecting") setState("initializing");
+      });
+      room.on(RoomEvent.Disconnected, () => cleanup("Session ended. Press Start to talk again."));
+
+      await room.connect(url, token);
+      await room.startAudio();
+      await room.localParticipant.setMicrophoneEnabled(true);
+
+      setState("initializing", "Jarvis is joining…");
+      els.start.hidden = true;
+      els.mic.hidden = els.cam.hidden = els.end.hidden = false;
+    } catch (err) {
+      console.error(err);
+      cleanup(err.message || "Could not connect.", true);
+    }
+  }
+
+  function cleanup(message, isError) {
+    if (room) { room.disconnect(); room = null; }
+    els.preview.srcObject = null;
+    els.preview.classList.remove("on");
+    els.sink.innerHTML = "";
+    els.start.hidden = false; els.start.disabled = false;
+    els.mic.hidden = els.cam.hidden = els.end.hidden = true;
+    els.mic.setAttribute("aria-pressed", "true"); els.mic.textContent = "Mute";
+    els.cam.setAttribute("aria-pressed", "false"); els.cam.textContent = "Camera on";
+    setState(isError ? "error" : "idle", message);
+  }
+
+  /* ---------- Controls ---------- */
+  els.start.addEventListener("click", start);
+  els.end.addEventListener("click", () => cleanup("Session ended. Press Start to talk again."));
+
+  els.mic.addEventListener("click", async () => {
+    const on = els.mic.getAttribute("aria-pressed") !== "true";
+    await room.localParticipant.setMicrophoneEnabled(on);
+    els.mic.setAttribute("aria-pressed", String(on));
+    els.mic.textContent = on ? "Mute" : "Unmute";
+  });
+
+  els.cam.addEventListener("click", async () => {
+    const on = els.cam.getAttribute("aria-pressed") !== "true";
+    try {
+      const pub = await room.localParticipant.setCameraEnabled(on);
+      els.cam.setAttribute("aria-pressed", String(on));
+      els.cam.textContent = on ? "Camera off" : "Camera on";
+      if (on && pub && pub.track) {
+        els.preview.srcObject = new MediaStream([pub.track.mediaStreamTrack]);
+        els.preview.play().catch(() => {});
+        els.preview.classList.add("on");
+      } else {
+        els.preview.srcObject = null;
+        els.preview.classList.remove("on");
+      }
+    } catch (err) {
+      els.hint.textContent = "Camera permission was blocked. Allow it in your browser settings.";
+    }
+  });
+
+  /* ---------- Orb: the one expressive element ---------- */
+  const ctx = els.orb.getContext("2d");
+  const W = els.orb.width, C = W / 2;
+  let level = 0, t = 0;
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function agentLevel() {
+    if (!room) return 0;
+    for (const p of room.remoteParticipants.values()) {
+      if (p.kind === ParticipantKind.AGENT) return p.audioLevel || 0;
+    }
+    return 0;
+  }
+
+  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function draw() {
+    t += 0.016;
+    const target = agentState === "speaking" ? Math.min(1, agentLevel() * 3)
+                 : agentState === "listening" ? 0.12 + 0.05 * Math.sin(t * 2)
+                 : agentState === "thinking" ? 0.2 + 0.1 * Math.sin(t * 6)
+                 : 0.06;
+    level += (target - level) * 0.15;
+
+    ctx.clearRect(0, 0, W, W);
+    const blue = css("--blue"), amber = css("--amber"), mist = css("--mist");
+    const accent = agentState === "thinking" ? amber : blue;
+    const base = W * 0.2;
+    const rings = 5;
+
+    for (let i = rings; i >= 0; i--) {
+      const r = base + i * W * 0.045 + level * W * 0.12 * (i / rings);
+      ctx.beginPath();
+      const pts = 90;
+      for (let k = 0; k <= pts; k++) {
+        const a = (k / pts) * Math.PI * 2;
+        const wob = reduced ? 0 : Math.sin(a * 3 + t * (1.2 + i * 0.25)) * level * W * 0.03 * (i / rings + 0.3);
+        const rr = r + wob;
+        const x = C + Math.cos(a) * rr, y = C + Math.sin(a) * rr;
+        k === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.lineWidth = i === 0 ? 0 : 3;
+      ctx.strokeStyle = i === 0 ? "transparent" : mist;
+      if (i === 0) { ctx.fillStyle = accent; ctx.fill(); }
+      else { ctx.globalAlpha = 0.35 + 0.65 * (1 - i / rings); ctx.strokeStyle = accent; ctx.stroke(); ctx.globalAlpha = 1; }
+    }
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+</script>
+</body>
+</html>
