@@ -18,4 +18,4 @@ RUN chmod +x start.sh
 
 EXPOSE 10000
 
-CMD ["bash", "start.sh"]
+CMD ["bash", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT:-10000}"]
